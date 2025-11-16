@@ -6,7 +6,7 @@ import shutil
 import signal
 import subprocess
 import re
-
+from core.mitigation_manager import MitigationManager
 from aiohttp import web, ClientSession
 
 import config
@@ -55,22 +55,27 @@ def discover_listening_ports():
         logger.error(f"Portlar taranırken bir hata oluştu: {e}")
 
 async def main():
-    background_task = None
+    background_task = None      # 10 saniyelik temizlik
+    resource_task = None        # 1 saniyelik resource monitor
     http_runner = None
     generic_tcp_server = None
-    
-    # Kapanma sinyalini yakalamak için bir Event oluştur
+
+    # Stop event
     stop_event = asyncio.Event()
     loop = asyncio.get_event_loop()
-    
-    # Sinyal geldiğinde sadece Event'i set et, başka bir şey yapma
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop_event.set)
 
     try:
         mitigator = MitigationManager()
+
+        # --- 10 saniyede bir token+ban temizleme ---
         background_task = asyncio.create_task(mitigator.run_background_tasks())
 
+        # --- 1 saniyede bir CPU/RAM/NET loglama ---
+        resource_task = asyncio.create_task(mitigator.run_resource_monitor())
+
+        # --- HTTP Proxy ---
         http_mitigator = HTTPDDoSMitigator()
         http_app = web.Application()
         http_app["session"] = ClientSession()
@@ -83,33 +88,42 @@ async def main():
         await http_site.start()
         logger.info(f"HTTP Proxy dinlemede: 0.0.0.0:{config.HTTP_PROXY_LISTEN_PORT}")
 
+        # --- Generic TCP Proxy ---
         generic_tcp_server = await asyncio.start_server(
             handle_generic_tcp, '0.0.0.0', config.GENERIC_TCP_LISTEN_PORT
         )
         logger.info(f"Genel TCP Proxy dinlemede: 0.0.0.0:{config.GENERIC_TCP_LISTEN_PORT}")
 
         logger.info("Uygulama çalışıyor. Durdurmak için Ctrl+C'ye basın.")
-        
-        # Program burada sinyal gelene kadar bekler
+
+        # Sinyal bekle
         await stop_event.wait()
 
-        # <--- YENİ MANTIK: Sinyal geldikten sonra, finally bloğundan ÖNCE sunucuları kapat --->
+        # Kapanış
         logger.info("Durdurma sinyali alındı, Python sunucuları kapatılıyor...")
-        background_task.cancel()
+
+        if background_task:
+            background_task.cancel()
+
+        if resource_task:
+            resource_task.cancel()
+
         if http_runner:
             await http_runner.cleanup()
+
         if generic_tcp_server:
             generic_tcp_server.close()
             await generic_tcp_server.wait_closed()
+
         logger.info("Python sunucuları durduruldu.")
 
     finally:
-        # <--- YENİ MANTIK: Bu blok, sunucular tamamen kapandıktan SONRA çalışır --->
         logger.info("Program sonlanıyor, sistem temizleniyor...")
         iptables_manager.cleanup_transparent_proxy_rules()
         iptables_hardening.cleanup_kernel_level_protection()
         ipset_manager.cleanup()
         logger.info("Sistem temizlendi. Çıkılıyor.")
+
 
 if __name__ == "__main__":
     if os.geteuid() != 0:

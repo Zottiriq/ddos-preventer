@@ -10,6 +10,8 @@ from pathlib import Path
 import os
 import config
 from . import ipset_manager
+from core.resource_monitor import ResourceMonitor
+
 
 logger = logging.getLogger("ddos-preventer")
 
@@ -123,6 +125,7 @@ class MitigationManager:
         return cls._instance
 
     def __init__(self):
+        self.resource = ResourceMonitor()
         if hasattr(self, '_initialized'):
             return
         self._initialized = True
@@ -259,12 +262,17 @@ class MitigationManager:
             self.conns[key] = max(0, self.conns.get(key, 1) - 1)
 
     async def run_background_tasks(self):
-        """Temizlik ve heartbeat işlemleri."""
-        heartbeat_file = Path("/tmp/ddos_preventer.heartbeat")
+        """Temizlik işlemleri."""
         while True:
             try:
-                heartbeat_file.touch()
                 await self.clear_expired_entries()
             except Exception as e:
                 logger.exception("Arka plan temizlik görevinde hata: %s", e)
             await asyncio.sleep(10)
+    async def run_resource_monitor(self):
+        while True:
+            try:
+                self.resource.update()
+            except Exception as e:
+                logger.error("Resource monitor error: %s", e)
+            await asyncio.sleep(1)
