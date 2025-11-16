@@ -3,7 +3,7 @@ import psutil
 from collections import deque
 
 class ResourceMonitor:
-    def __init__(self, log_path="/var/log/resource.log"):
+    def __init__(self, log_path="/home/log/resource.log"):
         self.log_path = log_path
 
         # 1 saatlik kayıtlar (3600 saniye)
