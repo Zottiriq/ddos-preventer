@@ -9,7 +9,6 @@ logger = logging.getLogger("ddos-preventer")
 IPTABLES_FILTER_CHAIN = "DDOS_FILTER"
 
 def _run_shell(cmd):
-    """iptables veya sysctl komutlarını çalıştırır ve hataları yakalar."""
     try:
         result = subprocess.run(cmd, check=True, text=True, timeout=5, capture_output=True)
         return result
@@ -23,108 +22,88 @@ def _run_shell(cmd):
         return None
 
 def _set_sysctl_param(param, value, comment="DDoS-Preventer"):
-    """Bir sysctl parametresini ayarlar ve /etc/sysctl.conf'a kalıcı olarak ekler."""
     try:
         logger.info(f"Kernel parametresi ayarlanıyor: {param} = {value}")
         if not _run_shell(["sysctl", "-w", f"{param}={value}"]):
-            logger.error(f"{param} geçici olarak ayarlanamadı.")
             return
-
         conf_path = "/etc/sysctl.conf"
         setting_line = f"{param} = {value}\n"
         with open(conf_path, 'r+') as f:
-            content = f.read()
-            if setting_line.strip().split('=')[0].strip() in content:
-                logger.info(f"{param} ayarı {conf_path} içinde zaten mevcut.")
-            else:
+            if setting_line.strip().split('=')[0].strip() not in f.read():
                 f.seek(0, 2)
                 f.write(f"\n# {comment}\n{setting_line}")
-                logger.info(f"{param} ayarı {conf_path} dosyasına kalıcı olarak eklendi.")
     except Exception as e:
-        logger.error(f"{param} ayarlanırken bir hata oluştu: {e}")
+        logger.error(f"{param} ayarlanırken hata: {e}")
 
 def enable_syn_cookies():
-    """SYN Cookie korumasını etkinleştirir."""
-    logger.info("SYN Cookie koruması kontrol ediliyor...")
     result = _run_shell(["sysctl", "net.ipv4.tcp_syncookies"])
-    if result and ("= 1" in result.stdout):
-        logger.info("SYN Cookie koruması zaten aktif.")
-        return
-    _set_sysctl_param("net.ipv4.tcp_syncookies", "1", "Enabled by DDoS-Preventer for SYN Flood protection")
+    if not (result and "= 1" in result.stdout):
+        _set_sysctl_param("net.ipv4.tcp_syncookies", "1")
 
 def adjust_conntrack_settings():
-    """Connection tracking (conntrack) tablosu boyutunu ayarlar."""
-    logger.info("Connection tracking (conntrack) tablosu ayarları kontrol ediliyor...")
     param = "net.netfilter.nf_conntrack_max"
-    target_value = config.KERNEL_CONNTRACK_MAX
-
-    result = _run_shell(["sysctl", param])
-    if result:
-        try:
-            current_value = int(result.stdout.strip().split("=")[1].strip())
-            if current_value >= target_value:
-                logger.info(f"{param} zaten yeterli bir değerde ({current_value}). Değişiklik yapılmadı.")
-                return
-        except (ValueError, IndexError):
-            logger.warning(f"Mevcut {param} değeri okunamadı.")
-
-    _set_sysctl_param(param, str(target_value), "Increased by DDoS-Preventer to handle more connections")
-
+    _set_sysctl_param(param, str(config.KERNEL_CONNTRACK_MAX))
 
 def setup_kernel_level_protection():
-    """
-    SYN Flood ve diğer temel ağ saldırılarına karşı iptables kurallarını ayarlar.
-    """
     logger.info("Kernel seviyesi iptables koruma kuralları ayarlanıyor...")
     _run_shell(["iptables", "-N", IPTABLES_FILTER_CHAIN])
     _run_shell(["iptables", "-I", "INPUT", "1", "-j", IPTABLES_FILTER_CHAIN])
 
-    # --- YENİ ve GÜÇLENDİRİLMİŞ KURAL SETİ ---
-    
-    # 1. ipset listesindeki IP'leri en başta engelle
+    # 1. IPSET (Blacklist) kontrolü
     _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN,
-                "-m", "set", "--match-set", config.DEFAULT_IPSET_NAME, "src",
-                "-j", "DROP"])
+                "-m", "set", "--match-set", config.DEFAULT_IPSET_NAME, "src", "-j", "DROP"])
 
-    # 2. Kurulmuş ve ilgili bağlantılardan gelen paketlere her zaman izin ver. Bu, performansı artırır.
+    # 2. ESTABLISHED bağlantılara izin ver
     _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, 
-                "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", 
-                "-j", "ACCEPT"])
+                "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
 
     # 3. Geçersiz paketleri düşür
     _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, 
-                "-m", "conntrack", "--ctstate", "INVALID", 
-                "-j", "DROP"])
+                "-m", "conntrack", "--ctstate", "INVALID", "-j", "DROP"])
 
-    # 4. Genel UDP hız limitini uygula
+    # --- KERNEL YÖNETİMLİ SERVİSLER ---
+    
+    # A) SSH Brute-Force Koruması
+    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "tcp", "--dport", "22", 
+                "-m", "state", "--state", "NEW", "-m", "recent", "--set", "--name", "SSH_LIMIT", "--rsource"])
+    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "tcp", "--dport", "22", 
+                "-m", "state", "--state", "NEW", "-m", "recent", "--update", "--seconds", "60", "--hitcount", "7", 
+                "--name", "SSH_LIMIT", "--rsource", "-j", "DROP"])
+    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "tcp", "--dport", "22", "-j", "ACCEPT"])
+
+    # B) Veritabanı Koruması
+    db_ports = "3306,5432,6379"
+    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "tcp", "-m", "multiport", "--dports", db_ports,
+                "-m", "hashlimit", "--hashlimit-upto", "50/s", "--hashlimit-burst", "100",
+                "--hashlimit-mode", "srcip", "--hashlimit-name", "db_rate", "-j", "ACCEPT"])
+
+    # C) VPN (Fortinet, OpenVPN, WireGuard) - ÖZEL İZİN
+    # Fortinet IPsec (500, 4500) ve diğer UDP VPN portları
+    vpn_udp_ports = "500,4500,1194,51820"
+    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "udp", "-m", "multiport", "--dports", vpn_udp_ports, "-j", "ACCEPT"])
+
+    # Fortinet SSL VPN (Genellikle 10443 kullanılır, 443 ise web ile çakışabilir)
+    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "tcp", "--dport", "10443", "-j", "ACCEPT"])
+
+    # 4. Genel UDP Limiti
     if config.ENABLE_UDP_PROTECTION:
-        logger.info(f"Genel UDP hız limiti etkinleştiriliyor ({config.UDP_LIMIT_RATE})...")
         _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "udp", 
                     "-m", "limit", "--limit", config.UDP_LIMIT_RATE, "--limit-burst", str(config.UDP_LIMIT_BURST),
                     "-j", "ACCEPT"])
         _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "udp", "-j", "DROP"])
 
-    # 5. SYN Flood'a karşı AKILLI KORUMA (hashlimit ile)
-    # Bu, tek bir IP'nin saniyede 4'ten fazla yeni bağlantı kurmasını engeller.
-    # Bu kural, SYN Cookie'nin çalışmasına izin verir.
+    # 5. Genel SYN Flood Koruması
     _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "tcp", "--syn",
-                "-m", "hashlimit",
-                "--hashlimit-upto", "25/s",
-                "--hashlimit-burst", "50",
-                "--hashlimit-mode", "srcip",
-                "--hashlimit-name", "conn_rate",
-                "-j", "ACCEPT"])
+                "-m", "hashlimit", "--hashlimit-upto", "25/s", "--hashlimit-burst", "50",
+                "--hashlimit-mode", "srcip", "--hashlimit-name", "conn_rate", "-j", "ACCEPT"])
                 
-    # 6. Geri kalan her şeyi (hız limitini aşan SYN'ler, istenmeyen diğer paketler) düşür.
+    # 6. Kalan her şeyi düşür
     _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-j", "DROP"])
 
     logger.info("Gelişmiş Kernel seviyesi iptables koruması aktif.")
 
-
 def cleanup_kernel_level_protection():
-    """Eklenen tüm kernel seviyesi iptables koruma kurallarını temizler."""
-    logger.info("Kernel seviyesi iptables koruma kuralları temizleniyor...")
+    logger.info("Kernel seviyesi iptables temizleniyor...")
     _run_shell(["iptables", "-D", "INPUT", "-j", IPTABLES_FILTER_CHAIN])
     _run_shell(["iptables", "-F", IPTABLES_FILTER_CHAIN])
     _run_shell(["iptables", "-X", IPTABLES_FILTER_CHAIN])
-    logger.info("Kernel seviyesi iptables koruması temizlendi.")
