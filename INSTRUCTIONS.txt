@@ -4,6 +4,8 @@ sudo systemctl start ddos-preventer.service ile başlar
 
 sudo systemctl stop ddos-preventer.service ile durur
 
+sudo systemctl restart ddos-preventer.service ile restart
+
 sudo systemctl daemon-reload ile reload atılır
 
 journalctl -u ddos-preventer -o cat -f  ile anlık loglar izlenebilir
