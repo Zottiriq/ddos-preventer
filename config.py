@@ -8,20 +8,21 @@ IPTABLES_CHAIN = "DDOS_GATEWAY"
 
 # Çekirdek (Kernel) seviyesi SYN Flood koruması için limitler.
 # Yüksek trafikli siteler için bu değerleri artırmanız gerekebilir.
+ENABLE_SYN_FLOOD_PROTECTION = True
 IPTABLES_SYN_LIMIT_RATE = "10/s"
-IPTABLES_SYN_LIMIT_BURST = 20
+IPTABLES_SYN_LIMIT_BURST = "20"
 
 # <--- YENİ: UDP Flood Koruması Ayarları --->
 # Basit UDP flood saldırılarına karşı genel bir hız limiti uygular.
 # Oyun sunucusu, DNS gibi UDP servisleriniz varsa bu ayarları dikkatli yapın.
 ENABLE_UDP_PROTECTION = True
 UDP_LIMIT_RATE = "100/s"
-UDP_LIMIT_BURST = 200
+UDP_LIMIT_BURST = "200"
 
 # <--- YENİ: conntrack Tablosu Optimizasyonu --->
 # Sunucunun kaldırabileceği anlık bağlantı sayısını artırır.
 # Değer, sistem RAM'ine göre ayarlanmalıdır. 1GB RAM için 65536 iyi bir başlangıçtır.
-KERNEL_CONNTRACK_MAX = 131072
+KERNEL_CONNTRACK_MAX = "131072"
 
 
 # --- UYGULAMA KATMANI LİMİTLERİ ---

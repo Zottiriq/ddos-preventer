@@ -23,52 +23,54 @@ def _run_shell(cmd):
         return None
 
 def _set_sysctl_param(param, value, comment="DDoS-Preventer"):
-    """Bir sysctl parametresini ayarlar ve /etc/sysctl.conf'a kalıcı olarak ekler."""
     try:
         logger.info(f"Kernel parametresi ayarlanıyor: {param} = {value}")
+
         if not _run_shell(["sysctl", "-w", f"{param}={value}"]):
             logger.error(f"{param} geçici olarak ayarlanamadı.")
             return
 
         conf_path = "/etc/sysctl.conf"
         setting_line = f"{param} = {value}\n"
-        with open(conf_path, 'r+') as f:
+
+        with open(conf_path, 'a+') as f:
+            f.seek(0)
             content = f.read()
             if setting_line.strip().split('=')[0].strip() in content:
-                logger.info(f"{param} ayarı {conf_path} içinde zaten mevcut.")
+                logger.info(f"{param} ayarı zaten mevcut.")
             else:
-                f.seek(0, 2)
                 f.write(f"\n# {comment}\n{setting_line}")
-                logger.info(f"{param} ayarı {conf_path} dosyasına kalıcı olarak eklendi.")
+                logger.info(f"{param} ayarı kalıcı olarak eklendi.")
+
     except Exception as e:
         logger.error(f"{param} ayarlanırken bir hata oluştu: {e}")
 
 def enable_syn_cookies():
-    """SYN Cookie korumasını etkinleştirir."""
-    logger.info("SYN Cookie koruması kontrol ediliyor...")
-    result = _run_shell(["sysctl", "net.ipv4.tcp_syncookies"])
-    if result and ("= 1" in result.stdout):
-        logger.info("SYN Cookie koruması zaten aktif.")
-        return
-    _set_sysctl_param("net.ipv4.tcp_syncookies", "1", "Enabled by DDoS-Preventer for SYN Flood protection")
+    """SYN Cookie korumasını etkinleştirir"""
+    try:
+        _set_sysctl_param(
+            "net.ipv4.tcp_syncookies",
+            "1",
+            "Enabled by DDoS-Preventer for SYN Flood protection"
+        )
+        logger.info("SYN Cookie koruması aktif edildi.")
+    except Exception as e:
+        logger.error(f"SYN Cookie ayarlanırken hata oluştu: {e}")
 
 def adjust_conntrack_settings():
-    """Connection tracking (conntrack) tablosu boyutunu ayarlar."""
-    logger.info("Connection tracking (conntrack) tablosu ayarları kontrol ediliyor...")
+    """Conntrack tablosu boyutunu doğrudan ayarlar."""
     param = "net.netfilter.nf_conntrack_max"
     target_value = config.KERNEL_CONNTRACK_MAX
 
-    result = _run_shell(["sysctl", param])
-    if result:
-        try:
-            current_value = int(result.stdout.strip().split("=")[1].strip())
-            if current_value >= target_value:
-                logger.info(f"{param} zaten yeterli bir değerde ({current_value}). Değişiklik yapılmadı.")
-                return
-        except (ValueError, IndexError):
-            logger.warning(f"Mevcut {param} değeri okunamadı.")
-
-    _set_sysctl_param(param, str(target_value), "Increased by DDoS-Preventer to handle more connections")
+    try:
+        _set_sysctl_param(
+            param,
+            target_value,
+            "Increased by DDoS-Preventer to handle more connections"
+        )
+        logger.info(f"{param} {target_value} olarak ayarlandı.")
+    except Exception as e:
+        logger.error(f"{param} ayarlanırken hata oluştu: {e}")
 
 
 def setup_kernel_level_protection():
@@ -98,28 +100,55 @@ def setup_kernel_level_protection():
 
     # 4. Genel UDP hız limitini uygula
     if config.ENABLE_UDP_PROTECTION:
-        logger.info(f"Genel UDP hız limiti etkinleştiriliyor ({config.UDP_LIMIT_RATE})...")
-        _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "udp", 
-                    "-m", "limit", "--limit", config.UDP_LIMIT_RATE, "--limit-burst", str(config.UDP_LIMIT_BURST),
+        logger.info(f"UDP per-IP hız limiti etkin ({config.UDP_LIMIT_RATE})...")
+
+        _run_shell([
+            "iptables", "-A", IPTABLES_FILTER_CHAIN,
+            "-p", "udp",
+            "-m", "hashlimit",
+            "--hashlimit", config.UDP_LIMIT_RATE,
+            "--hashlimit-burst", config.UDP_LIMIT_BURST,
+            "--hashlimit-mode", "srcip",
+            "--hashlimit-name", "udp_rate",
+            "-j", "ACCEPT"
+        ])
+
+        _run_shell([
+            "iptables", "-A", IPTABLES_FILTER_CHAIN,
+            "-p", "udp",
+            "-j", "DROP"
+        ])
+    if config.ENABLE_SYN_FLOOD_PROTECTION:
+        # 5. SYN Flood'a karşı AKILLI KORUMA (hashlimit ile)
+        _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN,
+                    "-p", "tcp", "--syn",
+                    "-m", "hashlimit",
+                    "--hashlimit-upto", config.IPTABLES_SYN_LIMIT_RATE,
+                    "--hashlimit-burst", config.IPTABLES_SYN_LIMIT_BURST,
+                    "--hashlimit-mode", "srcip",
+                    "--hashlimit-name", "conn_rate",
                     "-j", "ACCEPT"])
-        _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "udp", "-j", "DROP"])
+                    
+        # 6. Geri kalan her şeyi (hız limitini aşan SYN'ler, istenmeyen diğer paketler) düşür.
+        _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-j", "DROP"])
 
-    # 5. SYN Flood'a karşı AKILLI KORUMA (hashlimit ile)
-    # Bu, tek bir IP'nin saniyede 4'ten fazla yeni bağlantı kurmasını engeller.
-    # Bu kural, SYN Cookie'nin çalışmasına izin verir.
-    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-p", "tcp", "--syn",
-                "-m", "hashlimit",
-                "--hashlimit-upto", "25/s",
-                "--hashlimit-burst", "50",
-                "--hashlimit-mode", "srcip",
-                "--hashlimit-name", "conn_rate",
-                "-j", "ACCEPT"])
-                
-    # 6. Geri kalan her şeyi (hız limitini aşan SYN'ler, istenmeyen diğer paketler) düşür.
-    _run_shell(["iptables", "-A", IPTABLES_FILTER_CHAIN, "-j", "DROP"])
+        logger.info("Gelişmiş Kernel seviyesi iptables koruması aktif.")
 
-    logger.info("Gelişmiş Kernel seviyesi iptables koruması aktif.")
+def verify_iptables_rules():
+    """DDOS_FILTER ve INPUT bağlantısı yerinde mi kontrol eder."""
+    # Zincir var mı?
+    chain_ok = _run_shell(["iptables", "-L", IPTABLES_FILTER_CHAIN])
+    if chain_ok is None:
+        logger.error("DDOS_FILTER zinciri kayıp!")
+        return False
 
+    # INPUT → DDOS_FILTER var mı?
+    input_ok = _run_shell(["iptables", "-C", "INPUT", "-j", IPTABLES_FILTER_CHAIN])
+    if input_ok is None:
+        logger.error("INPUT zinciri DDOS_FILTER’e bağlanmamış!")
+        return False
+
+    return True
 
 def cleanup_kernel_level_protection():
     """Eklenen tüm kernel seviyesi iptables koruma kurallarını temizler."""
