@@ -72,7 +72,7 @@ class MitigationManager:
 
             # Yeni interface satırı (ör: "2: ens18: <BROADCAST,...>")
             if ":" in line and not line.startswith("inet"):
-                current_iface = line.split(":")[1].strip()
+                current_iface = line.split(":")[1].strip().split("@")[0]
                 continue
 
             # IPv4 satırı mı?
@@ -224,11 +224,9 @@ class MitigationManager:
             self.conns[key] = max(0, self.conns.get(key, 1) - 1)
 
     async def run_background_tasks(self):
-        """Temizlik ve heartbeat işlemleri."""
-        heartbeat_file = Path("/tmp/ddos_preventer.heartbeat")
+        """Temizlik işlemleri."""
         while True:
             try:
-                heartbeat_file.touch()
                 await self.clear_expired_entries()
             except Exception as e:
                 logger.exception("Arka plan temizlik görevinde hata: %s", e)

@@ -13,6 +13,7 @@ async def get_original_destination(writer):
     try:
         # SOL_IP = 0, SO_ORIGINAL_DST = 80
         addr = sock.getsockopt(socket.IPPROTO_IP, 80, 16)
+        # buradaki _ ipv4 için 2 değeri, ipv6 için 10 değeri döner. kod sadece ipv4 için olduğundan değer atanmadı.
         _, port, ip1, ip2, ip3, ip4 = struct.unpack("!HHBBBB", addr[:8])
         ip = f"{ip1}.{ip2}.{ip3}.{ip4}"
         return ip, port
@@ -39,6 +40,7 @@ async def bridge_streams(reader1, writer1, reader2, writer2):
                     pass
 
 async def handle_generic_tcp(client_reader, client_writer):
+    # _ ile umursanmayan değer source portu temsil eder.
     client_ip, _ = client_writer.get_extra_info('peername', ('unknown', 0))
     mitigator = MitigationManager()
 
