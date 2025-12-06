@@ -67,6 +67,7 @@ Stop with:
 ```bash
 Ctrl + C
 ```
+```bash
 ##### 🏗 Architecture Overview
 main.py                     → startup, signal handling, launches HTTP/TCP proxies, applies/cleans iptables & ipset
 config.py                   → kernel params, default limits, per-port overrides, listeners, log paths
@@ -76,7 +77,7 @@ core/iptables_hardening.py  → DDOS_FILTER chain, SYN/UDP defense, sysctl tunin
 core/mitigation_manager.py  → token-bucket limiter, connection counting, whitelist loading
 handlers/http_handler.py    → HTTP reverse proxy with SO_ORIGINAL_DST + rate limits
 handlers/generic_tcp_handler.py → transparent TCP proxy with rate/connection limits
-
+```
 ##### ⚙️ Configuration (config.py)
 
 ##### Default Limits
