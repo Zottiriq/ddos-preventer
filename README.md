@@ -28,8 +28,15 @@ Low-overhead token-bucket limiter
 
 Auto port discovery via ss -lnt
 
-Whitelist file: /etc/ddos_preventer/whitelist.txt
+#### Installation
 
+Follow this step to set up the project.
+
+1. Clone the repository
+```bash
+git clone https://github.com/keremincii/ddos-preventer.git
+cd ddos-preventer
+```
 ##### 📦 Requirements
 
 Linux with iptables + ipset support
@@ -111,6 +118,7 @@ Ports not listed are auto-discovered and protected with default limits.
 
 Install the unit file:
 ```bash
+cd ddos-preventer-for-lan
 sudo cp ddos-preventer.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable ddos-preventer
