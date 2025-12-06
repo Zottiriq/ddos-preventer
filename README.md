@@ -134,6 +134,7 @@ Whitelisted IPs bypass rate/connection limits and blocklisting
 ##### 📜 Logging
 
 Default log file:
+
 ```bash
 /home/log/ddos-preventer.log
 ```
