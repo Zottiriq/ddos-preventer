@@ -14,8 +14,6 @@ class HTTPDDoSMitigator:
         self.mitigator = MitigationManager()
 
     def _client_ip_from_request(self, req):
-        xff = req.headers.get("X-Forwarded-For")
-        if xff: return xff.split(",")[0].strip()
         peer = req.transport.get_extra_info("peername")
         return (peer[0] if peer else req.remote) or "unknown"
 
