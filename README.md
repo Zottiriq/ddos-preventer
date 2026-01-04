@@ -1,4 +1,4 @@
-# DDoS Preventer for LAN - Project Manual
+# DDoS Preventer for LAN 
 
 ## About the Project
 **DDoS Preventer for LAN** is a lightweight `iptables + ipset + asyncio` based transparent proxy solution designed to protect Linux servers against DDoS attacks in LAN/WAN environments.
