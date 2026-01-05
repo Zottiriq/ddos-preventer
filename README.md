@@ -11,6 +11,7 @@ graph TD
     
     subgraph Linux_Kernel [LINUX KERNEL]
         style Linux_Kernel fill:#f9f9f9,stroke:#333,color:#000
+        Whitelist{Is IP Whitelisted?}
         Blocklist{Is IP Banned?}
         FloodProt{SYN/UDP Flood?}
         NAT[iptables NAT Redirection<br/>To Proxy Port: 8081/9000]
@@ -30,7 +31,14 @@ graph TD
     end
 
     %% Akış Mantığı
-    Kernel --> Blocklist
+    Kernel --> Whitelist
+
+    %% Whitelist ise tüm kontrolleri atla (Bypass)
+    Whitelist -- "Yes (Bypass All)" --> SSH & HTTP
+    
+    %% Whitelist değilse normal kontrollere devam et
+    Whitelist -- No --> Blocklist
+
     Blocklist -- Yes --> Drop1[⛔ DROP Packet]
     Blocklist -- No --> FloodProt
     
